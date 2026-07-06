@@ -9,13 +9,15 @@ import {
   Flame, 
   Medal,
   ChevronRight,
-  ArrowLeft
+  ArrowLeft,
+  Trash2
 } from 'lucide-react';
 import { 
   createGroup, 
   joinGroup, 
   getMyGroups, 
-  getGroupLeaderboard 
+  getGroupLeaderboard,
+  deleteGroup
 } from '@/lib/storage';
 import type { Group, LeaderboardEntry } from '@/lib/types';
 
@@ -69,16 +71,42 @@ export default function CommunityPage() {
     setSelectedGroup(group);
   };
 
+  const handleDeleteGroup = () => {
+    if (confirm('Are you sure you want to delete this group? This cannot be undone.')) {
+      if (deleteGroup(selectedGroup.id)) {
+        setGroups(getMyGroups());
+        setSelectedGroup(null);
+      } else {
+        setError('Failed to delete group. You may not have permission.');
+      }
+    }
+  };
+
   if (selectedGroup) {
+    const isCreator = selectedGroup.created_by === user?.id;
+
     return (
       <div className="max-w-md mx-auto p-4 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-24">
-        <button 
-          onClick={() => setSelectedGroup(null)}
-          className="flex items-center text-slate-400 hover:text-white mb-6 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4 mr-1" />
-          Back to Groups
-        </button>
+        <div className="flex items-center justify-between mb-6">
+          <button 
+            onClick={() => setSelectedGroup(null)}
+            className="flex items-center text-slate-400 hover:text-white transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4 mr-1" />
+            Back to Groups
+          </button>
+          
+          {isCreator && (
+            <button 
+              onClick={handleDeleteGroup}
+              className="flex items-center text-red-400 hover:text-red-300 transition-colors text-sm"
+              aria-label="Delete Group"
+            >
+              <Trash2 className="w-4 h-4 mr-1" />
+              Delete
+            </button>
+          )}
+        </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-6">
           <div className="flex items-center justify-between mb-2">

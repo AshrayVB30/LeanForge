@@ -362,6 +362,30 @@ export function joinGroup(joinCode: string): Group | null {
   return group;
 }
 
+export function deleteGroup(groupId: string): boolean {
+  const groups = getGlobalItem<Group[]>(GLOBAL_GROUPS_KEY, []);
+  const userId = getActiveUserId();
+  
+  const groupIndex = groups.findIndex(g => g.id === groupId);
+  if (groupIndex === -1) return false;
+  
+  // Only creator can delete
+  if (groups[groupIndex].created_by !== userId) {
+    return false;
+  }
+  
+  // Remove group
+  groups.splice(groupIndex, 1);
+  setGlobalItem(GLOBAL_GROUPS_KEY, groups);
+  
+  // Remove all members of this group
+  const members = getGlobalItem<GroupMember[]>(GLOBAL_MEMBERS_KEY, []);
+  const updatedMembers = members.filter(m => m.group_id !== groupId);
+  setGlobalItem(GLOBAL_MEMBERS_KEY, updatedMembers);
+  
+  return true;
+}
+
 export function getMyGroups(): Group[] {
   const groups = getGlobalItem<Group[]>(GLOBAL_GROUPS_KEY, []);
   const members = getGlobalItem<GroupMember[]>(GLOBAL_MEMBERS_KEY, []);
