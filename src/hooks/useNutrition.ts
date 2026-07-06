@@ -1,80 +1,118 @@
 'use client';
 
-// ============================================================
-// LeanForge — Nutrition Hook (localStorage-based, works offline)
-// ============================================================
-
-import { useState, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/providers/AuthProvider';
-import {
-  getTodayNutrition,
-  upsertNutrition,
-  addWaterLocal,
-  toggleSupplementLocal,
-  getNutritionHistory,
-} from '@/lib/storage';
 import type { NutritionLog, SupplementsTaken } from '@/lib/types';
 import { getToday } from '@/lib/utils';
 
 export function useNutrition() {
   const { user } = useAuth();
   const today = getToday();
-  const [refreshKey, setRefreshKey] = useState(0);
+  const queryClient = useQueryClient();
+  const supabase = createClient();
 
-  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
-
-  // Today's nutrition — reactive via refreshKey
-  const nutritionData = user ? getTodayNutrition(today) : null;
-
-  const todayNutrition = {
-    data: nutritionData,
-    isLoading: false,
-    error: null,
-    _refreshKey: refreshKey,
-  };
-
-  // Update nutrition
-  const updateNutrition = {
-    mutate: (updates: Partial<NutritionLog>) => {
-      if (!user) return;
-      upsertNutrition(today, updates);
-      refresh();
+  // Today's nutrition
+  const todayNutrition = useQuery({
+    queryKey: ['nutrition', today, user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      
+      const { data, error } = await supabase
+        .from('nutrition_logs')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('date', today)
+        .maybeSingle();
+        
+      if (error && error.code !== 'PGRST116') throw error;
+      
+      return data as NutritionLog | null;
     },
-    isPending: false,
+    enabled: !!user,
+  });
+
+  // Helper to upsert
+  const upsertData = async (updates: Partial<NutritionLog>) => {
+    if (!user) throw new Error('Not authenticated');
+    
+    // get existing to merge (since supabase upsert replaces entire row if not careful, though we can just update if it exists)
+    const { data: existing } = await supabase
+      .from('nutrition_logs')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('date', today)
+      .maybeSingle();
+
+    const merged = {
+      user_id: user.id,
+      date: today,
+      calories: updates.calories ?? existing?.calories ?? 0,
+      protein_g: updates.protein_g ?? existing?.protein_g ?? 0,
+      water_liters: updates.water_liters ?? existing?.water_liters ?? 0,
+      supplements_taken: {
+        creatine: updates.supplements_taken?.creatine ?? existing?.supplements_taken?.creatine ?? false,
+        soya_chunks: updates.supplements_taken?.soya_chunks ?? existing?.supplements_taken?.soya_chunks ?? false,
+        dry_fruits: updates.supplements_taken?.dry_fruits ?? existing?.supplements_taken?.dry_fruits ?? false,
+        fruits: updates.supplements_taken?.fruits ?? existing?.supplements_taken?.fruits ?? false,
+      }
+    };
+
+    const { data, error } = await supabase
+      .from('nutrition_logs')
+      .upsert(merged, { onConflict: 'user_id,date' })
+      .select()
+      .single();
+      
+    if (error) throw error;
+    return data;
   };
+
+  // Update nutrition (calories/protein)
+  const updateNutrition = useMutation({
+    mutationFn: async (updates: Partial<NutritionLog>) => upsertData(updates),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nutrition', today, user?.id] });
+    },
+  });
 
   // Add water
-  const addWater = {
-    mutate: (amount: number) => {
-      if (!user) return;
-      addWaterLocal(today, amount);
-      refresh();
+  const addWater = useMutation({
+    mutationFn: async (amount: number) => {
+      const current = todayNutrition.data?.water_liters || 0;
+      return upsertData({ water_liters: Math.max(0, current + amount) });
     },
-    isPending: false,
-  };
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nutrition', today, user?.id] });
+    },
+  });
 
   // Toggle supplement
-  const toggleSupplement = {
-    mutate: (key: keyof SupplementsTaken) => {
-      if (!user) return;
-      toggleSupplementLocal(today, key);
-      refresh();
+  const toggleSupplement = useMutation({
+    mutationFn: async (key: keyof SupplementsTaken) => {
+      const currentSupps = todayNutrition.data?.supplements_taken || {
+        creatine: false,
+        soya_chunks: false,
+        dry_fruits: false,
+        fruits: false,
+      };
+      
+      const updatedSupps = {
+        ...currentSupps,
+        [key]: !currentSupps[key],
+      };
+      
+      return upsertData({ supplements_taken: updatedSupps });
     },
-    isPending: false,
-  };
-
-  // History
-  const nutritionHistory = {
-    data: user ? getNutritionHistory() : [],
-    isLoading: false,
-    error: null,
-  };
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nutrition', today, user?.id] });
+    },
+  });
 
   return {
     todayNutrition,
     updateNutrition,
     addWater,
     toggleSupplement,
-    nutritionHistory,
   };
 }

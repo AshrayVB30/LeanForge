@@ -1,9 +1,5 @@
 'use client';
 
-// ============================================================
-// LeanForge — Auth Provider (works with or without Supabase)
-// ============================================================
-
 import {
   createContext,
   useContext,
@@ -13,31 +9,17 @@ import {
   type ReactNode,
 } from 'react';
 import type { UserProfile } from '@/lib/types';
-import { getLocalProfile, updateLocalProfile } from '@/lib/storage';
+import { createClient } from '@/lib/supabase/client';
 
-// Check if Supabase is properly configured
-function isSupabaseConfigured(): boolean {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-  return (
-    url.length > 0 &&
-    key.length > 0 &&
-    !url.includes('placeholder') &&
-    !key.includes('placeholder') &&
-    url.startsWith('https://')
-  );
-}
-
-interface DemoUser {
+interface AuthUser {
   id: string;
   email: string;
 }
 
 interface AuthContextType {
-  user: DemoUser | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   loading: boolean;
-  isDemo: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -47,88 +29,82 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<DemoUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const isDemo = !isSupabaseConfigured();
 
   useEffect(() => {
-    if (isDemo) {
-      // Demo mode: check if there's an active user
-      import('@/lib/storage').then(({ getLocalProfile, getActiveUserId, setActiveUserId }) => {
-        const activeId = getActiveUserId();
-        if (typeof window !== 'undefined' && localStorage.getItem('active_demo_user')) {
-          setActiveUserId(activeId);
-          const localProfile = getLocalProfile();
-          setUser({ id: activeId, email: activeId });
-          setProfile(localProfile);
-        } else {
-          setUser(null);
-          setProfile(null);
-        }
-        setLoading(false);
-      });
-    } else {
-      // Supabase mode
-      import('@/lib/supabase/client').then(({ createClient }) => {
-        const supabase = createClient();
-        supabase.auth.onAuthStateChange(async (_event, session) => {
-          if (session?.user) {
-            setUser({ id: session.user.id, email: session.user.email || '' });
-            const { data } = await supabase
-              .from('users')
-              .select('*')
-              .eq('id', session.user.id)
-              .single();
+    const supabase = createClient();
+    
+    // Initial session check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser({ id: session.user.id, email: session.user.email || '' });
+        supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single()
+          .then(({ data }) => {
             if (data) setProfile(data as UserProfile);
-          } else {
-            setUser(null);
-            setProfile(null);
-          }
-          setLoading(false);
-        });
-      }).catch(() => {
-        setLoading(false);
-      });
-    }
-  }, [isDemo]);
+          });
+      }
+      setLoading(false);
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        setUser({ id: session.user.id, email: session.user.email || '' });
+        const { data } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+        if (data) setProfile(data as UserProfile);
+      } else {
+        setUser(null);
+        setProfile(null);
+      }
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    console.log("DEMO MODE: Bypassing Supabase and signing in locally");
-    const { setActiveUserId, updateLocalProfile } = await import('@/lib/storage');
-    setActiveUserId(email);
-    // Fetch their specific profile
-    const p = updateLocalProfile({ email });
-    setUser({ id: p.id, email: p.email });
-    setProfile(p);
-    return { error: null };
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error: error?.message || null };
   }, []);
 
   const signUp = useCallback(async (email: string, password: string) => {
-    const { setActiveUserId, updateLocalProfile } = await import('@/lib/storage');
-    setActiveUserId(email);
-    const p = updateLocalProfile({ email, is_onboarded: false });
-    setUser({ id: p.id, email: p.email });
-    setProfile(p);
-    return { error: null };
+    const supabase = createClient();
+    const { error } = await supabase.auth.signUp({ email, password });
+    return { error: error?.message || null };
   }, []);
 
   const signOut = useCallback(async () => {
-    if (isDemo) {
-      const { setActiveUserId } = await import('@/lib/storage');
-      setActiveUserId(null);
-    } else {
-      const { createClient } = await import('@/lib/supabase/client');
-      await createClient().auth.signOut();
-    }
+    const supabase = createClient();
+    await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
-  }, [isDemo]);
+  }, []);
 
   const updateProfileFn = useCallback(async (updates: Partial<UserProfile>) => {
-    const updated = updateLocalProfile(updates);
-    setProfile(updated);
-  }, []);
+    if (!user) return;
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', user.id)
+      .select()
+      .single();
+      
+    if (!error && data) {
+      setProfile(data as UserProfile);
+    }
+  }, [user]);
 
   return (
     <AuthContext.Provider
@@ -136,7 +112,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         profile,
         loading,
-        isDemo,
         signIn,
         signUp,
         signOut,
