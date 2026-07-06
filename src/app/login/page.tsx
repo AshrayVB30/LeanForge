@@ -121,6 +121,7 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               icon={<Mail className="w-4 h-4" />}
+              autoComplete="email"
               required
             />
 
@@ -132,6 +133,7 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               icon={<Lock className="w-4 h-4" />}
+              autoComplete={isSignUp ? "new-password" : "current-password"}
               required
               minLength={6}
             />
